@@ -1,10 +1,12 @@
 --[[
-    WindUI Hybrid Loader v2
+    WindUI Hybrid Loader v3
 
     - Carga WindUI 1.6.66 (release fijo). Si falla, usa la rama main.
     - Activa NewElements por defecto (toggles, sliders y botones nuevos).
-    - Reintenta si falla la red y guarda la última copia buena en el
-      workspace para usarla cuando GitHub no responda.
+    - Tiempo límite y reintentos en cada descarga.
+    - Guarda la última copia buena en el workspace y la usa si GitHub falla.
+    - Modo rápido opcional: carga la copia local al instante y la actualiza
+      en segundo plano para la próxima vez.
     - Acepta Desc como Content en Notify.
     - No cambia la versión ni el código de la librería.
 
@@ -16,11 +18,14 @@
             Source = "https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/main.lua", -- tu copia, se prueba primero
             NewElements = true, -- false = estilo clásico por defecto
             Cache = true,       -- false = no guardar copia local
+            PreferCache = false,-- true = arranque rápido con la copia local
             Retries = 2,        -- intentos por fuente
+            Timeout = 15,       -- segundos máximos por descarga
+            Debug = false,      -- true = muestra los pasos en la consola
         }
 
     Tras cargar, WindUI.HybridInfo indica de dónde salió la librería:
-        { Source = "...", FromCache = false }
+        { Source = "...", FromCache = false, Version = "1.6.66" }
 ]]
 
 local env = (getgenv and getgenv() or {}).WindUIHybrid
@@ -28,8 +33,12 @@ local opts = type(env) == "table" and env or {}
 
 local NEW_ELEMENTS = opts.NewElements ~= false
 local USE_CACHE = opts.Cache ~= false
+local PREFER_CACHE = opts.PreferCache == true and USE_CACHE
+local DEBUG = opts.Debug == true
 local RETRIES = math.max(1, tonumber(opts.Retries) or 2)
+local TIMEOUT = math.max(1, tonumber(opts.Timeout) or 15)
 local CACHE_FILE = "WindUI/HybridCache.lua"
+local MIN_SIZE = 50000 -- una librería real pesa mucho más; descarta páginas de error
 
 local SOURCES = {}
 if type(opts.Source) == "string" and opts.Source ~= "" then
@@ -38,15 +47,49 @@ end
 table.insert(SOURCES, "https://github.com/Footagesus/WindUI/releases/download/1.6.66/main.lua")
 table.insert(SOURCES, "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
 
+local function log(...)
+    if DEBUG then
+        print("[WindUI Hybrid]", ...)
+    end
+end
+
 local function hasFs()
     return type(writefile) == "function"
         and type(readfile) == "function"
         and type(isfile) == "function"
 end
 
--- Compila el código y comprueba que sea realmente WindUI
+-- HttpGet con tiempo límite: una conexión colgada no bloquea el script
+local function httpGet(url)
+    local done, ok, result = false, false, nil
+
+    task.spawn(function()
+        ok, result = pcall(game.HttpGet, game, url)
+        done = true
+    end)
+
+    local startTime = os.clock()
+    while not done and os.clock() - startTime < TIMEOUT do
+        task.wait(0.05)
+    end
+
+    if not done then
+        return false, "timeout"
+    end
+    return ok, result
+end
+
+-- Comprobación sin ejecutar nada: tamaño, contenido y sintaxis
+local function looksValid(src)
+    return type(src) == "string"
+        and #src > MIN_SIZE
+        and string.find(src, "CreateWindow", 1, true) ~= nil
+        and loadstring(src) ~= nil
+end
+
+-- Compila, ejecuta y comprueba que sea realmente WindUI
 local function compile(src)
-    if type(src) ~= "string" or #src == 0 then
+    if type(src) ~= "string" or #src < MIN_SIZE then
         return nil
     end
 
@@ -65,10 +108,11 @@ end
 -- Reintenta solo si falló la red; un contenido inválido no mejora al repetir
 local function download(url)
     for attempt = 1, RETRIES do
-        local ok, src = pcall(game.HttpGet, game, url)
+        local ok, src = httpGet(url)
         if ok then
             return compile(src), src
         end
+        log("Intento " .. attempt .. " falló:", url, src)
         if attempt < RETRIES then
             task.wait(0.5)
         end
@@ -103,19 +147,43 @@ local function loadCache()
     return nil
 end
 
+-- Descarga en segundo plano y deja la copia lista para la próxima vez
+local function refreshCache()
+    for _, url in ipairs(SOURCES) do
+        local ok, src = httpGet(url)
+        if ok and looksValid(src) then
+            saveCache(src)
+            log("Copia local actualizada desde", url)
+            return
+        end
+    end
+end
+
 local WindUI, usedSource, fromCache
 
-for _, url in ipairs(SOURCES) do
-    local lib, src = download(url)
-    if lib then
-        WindUI, usedSource = lib, url
-        saveCache(src)
-        break
+if PREFER_CACHE then
+    WindUI = loadCache()
+    if WindUI then
+        usedSource, fromCache = CACHE_FILE, true
+        log("Cargado desde la copia local")
+        task.spawn(refreshCache)
     end
-    warn("[WindUI Hybrid] No se pudo cargar: " .. url)
 end
 
 if not WindUI then
+    for _, url in ipairs(SOURCES) do
+        local lib, src = download(url)
+        if lib then
+            WindUI, usedSource = lib, url
+            saveCache(src)
+            log("Cargado desde", url)
+            break
+        end
+        warn("[WindUI Hybrid] No se pudo cargar: " .. url)
+    end
+end
+
+if not WindUI and not PREFER_CACHE then
     WindUI = loadCache()
     if WindUI then
         usedSource, fromCache = CACHE_FILE, true
@@ -127,7 +195,11 @@ if not WindUI then
     error("[WindUI Hybrid] No se pudo cargar WindUI desde ninguna fuente", 2)
 end
 
-WindUI.HybridInfo = { Source = usedSource, FromCache = fromCache == true }
+WindUI.HybridInfo = {
+    Source = usedSource,
+    FromCache = fromCache == true,
+    Version = WindUI.Version,
+}
 
 local function shallowCopy(t)
     local copy = {}
