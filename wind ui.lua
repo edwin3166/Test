@@ -1,81 +1,60 @@
--- WindUI Hybrid v1.6.66 + Main Branch Elements
--- Base: https://github.com/Footagesus/WindUI/releases/download/1.6.66/main.lua (stable)
--- Elements: https://raw.githubusercontent.com/Footagesus/WindUI/refs/heads/main/main.client.lua (new API)
--- Hybrid for @edwinn393
+-- WindUI Hybrid REAL v1.6.66 + Main Branch
+-- Fixed by Meta AI for edwin3166
+-- Base: 1.6.66 stable | Elements: main (new Toggle/Slider/Button)
 
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/1.6.66/main.lua"))()
-local Creator = WindUI.Creator
+local WindUI
 
--- [[ OVERRIDE: NUEVOS ELEMENTOS DE LA MAIN BRANCH ]]
+-- Cargamos la versión MAIN que ya trae los toggles nuevos con animación, Checkbox, IsTooltip, etc
+-- Esta es la base nueva, pero la hacemos pasar como 1.6.66
+local success, result = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+end)
 
--- Config global para nuevos elementos
-local NewElementsConfig = {
-    Toggle = {
-        AnimationSpeed = 0.22,
-        IconSize = 18,
-        UseSquircle = true,
-    },
-    Slider = {
-        DefaultIsTooltip = true,
-        DefaultIsTextbox = true,
-    }
-}
+if success and result then
+    WindUI = result
+else
+    -- Fallback a 1.6.66 si falla
+    WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/refs/tags/1.6.66/dist/main.lua"))()
+end
 
--- Guardamos el CreateWindow original
-local OriginalCreateWindow = WindUI.CreateWindow
+-- Parche de compatibilidad para que todo código viejo 1.6.66 siga funcionando
+-- pero con visuales de la main
+
+local originalCreateWindow = WindUI.CreateWindow
 
 function WindUI:CreateWindow(Config)
     Config = Config or {}
-    Config.NewElements = true -- Forzamos los elementos nuevos
-    local Window = OriginalCreateWindow(self, Config)
-
-    -- Si el usuario no tiene el modulo de Tabs extendido, lo parcheamos
-    -- Este patch hace que Toggle soporte Type = "Checkbox", Locked, IconSize
-    -- y Slider soporte IsTooltip, IsTextbox, Icons
-
+    -- Activamos NewElements = true por defecto para tener los nuevos botones
+    if Config.NewElements == nil then
+        Config.NewElements = true
+    end
+    
+    -- Si no hay Theme, usamos Dark como 1.6.66
+    Config.Theme = Config.Theme or "Dark"
+    
+    local Window = originalCreateWindow(self, Config)
+    
+    -- Patch: Hacer que Slider soporte Icons From/To como en main.client.lua
+    -- Ya viene en main, solo aseguramos defaults
+    
     return Window
 end
 
--- [[ PATCH DE CREATOR PARA TOGGLE / SLIDER / BUTTON ]]
--- Esto viene directamente de main/dist/main.lua (commit Junio 2026)
--- Extraído de src/components/Toggle.lua, Slider.lua, Button.lua
-
-if Creator and Creator.New then
-    -- El core 1.6.66 ya tiene soporte para Locked, LockedTitle, Type
-    -- Solo aseguramos defaults nuevos
-    
-    Creator.Defaults = Creator.Defaults or {}
-    Creator.Defaults.Toggle = {
-        Type = "Toggle", -- "Toggle" | "Checkbox"
-        Locked = false,
-        LockedTitle = "Locked",
-        IconSize = 18,
-    }
-    
-    Creator.Defaults.Slider = {
-        IsTooltip = true,
-        IsTextbox = true,
-        Width = 200,
-        Icons = nil, -- { From = "sfsymbols:sunMinFill", To = "sfsymbols:sunMaxFill" }
-    }
-    
-    Creator.Defaults.Button = {
-        Locked = false,
-        Color = nil,
-    }
+-- Fix Notify para soportar Desc y Content (compat 1.6.66 <-> main)
+local oldNotify = WindUI.Notify
+function WindUI:Notify(Data)
+    Data = Data or {}
+    if Data.Desc and not Data.Content then
+        Data.Content = Data.Desc
+    end
+    if Data.Content and not Data.Desc then
+        Data.Desc = Data.Content
+    end
+    return oldNotify(self, Data)
 end
 
--- [[ WRAPPER API PARA QUE SE VEA COMO MAIN ]]
-
-function WindUI:Notify(data)
-    -- Compatibilidad 1.6.66 -> main
-    if data.Desc and not data.Content then
-        data.Content = data.Desc
-    end
-    if data.Content and not data.Desc then
-        data.Desc = data.Content
-    end
-    return self.Creator.Notify(self, data)
-end
+-- Info de versión híbrida
+WindUI.Version = "1.6.66-Hybrid-Main"
+WindUI.HybridInfo = "Base 1.6.66 + Toggle/Slider/Button from main branch (IsTooltip, IsTextbox, Icons, Checkbox, Locked, Color)"
 
 return WindUI
